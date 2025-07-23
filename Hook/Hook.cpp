@@ -1,3 +1,12 @@
+// Hook.cpp 主要负责 MapleStory 客户端的核心 Hook 逻辑，包括 API 拦截、网络初始化、资源挂载、窗口处理等。
+// 通过对关键 Windows API 进行 Hook，实现对游戏客户端的功能扩展和行为修改。
+//
+// 主要流程：
+// 1. 通过 GetStartupInfoA_Hook 完成网络初始化、域名修正、资源挂载等操作。
+// 2. 通过 CreateMutexA_Hook 完成网络重定向、数据包 Hook、去除多开检测等。
+// 3. 通过 CreateWindowExA_Hook 实现窗口标题自定义、广告窗口拦截等。
+// 4. 通过 ImmAssociateContext_Hook 实现输入法支持和伤害字皮肤应用。
+// 5. Install/Uninstall 用于安装和卸载所有 Hook。
 #include "Hook.h"
 #include "Network.h"
 #include "ResMan.h"
@@ -17,12 +26,16 @@
 #include<intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
+// 匿名命名空间，存放本文件私有的静态变量和函数
 namespace {
+	// gMapleR 用于管理 MapleStory 客户端的模块信息和资源操作
 	static Rosemary gMapleR;
+	// 标记各 Hook 是否已加载，防止重复初始化
 	static bool bGetStartupInfoALoaded = false;
 	static bool bCreateMutexALoaded = false;
 	static bool bImmAssociateContextLoaded = false;
 
+	// 获取当前进程的所有模块信息（用于判断调用者是否为主 EXE）
 	void GetModuleEntryList(std::vector<MODULEENTRY32W>& entryList) {
 		DWORD pid = GetCurrentProcessId();
 
@@ -53,7 +66,7 @@ namespace {
 		CloseHandle(hSnapshot);
 	}
 
-	// Make sure the executable unpacks itself.
+	// 判断调用者是否为主 EXE（用于确保 Hook 只对主程序生效）
 	bool IsEXECaller(void* vReturnAddress) {
 		if (gMapleR.IsInitialized()) {
 			DEBUG(L"gMapleR has already been initialized");
@@ -85,8 +98,11 @@ namespace {
 		return false;
 	}
 
+	// Hook: GetStartupInfoA，客户端启动时调用，适合做初始化
 	static auto _GetStartupInfoA = decltype(&GetStartupInfoA)(GetProcAddress(GetModuleHandle(L"KERNEL32"), "GetStartupInfoA"));
 	VOID WINAPI GetStartupInfoA_Hook(LPSTARTUPINFOA lpStartupInfo) {
+		// 只在首次调用且由主 EXE 调用时执行初始化逻辑
+		// 包括网络初始化、域名修正、去除本地校验、资源挂载、扩展资源管理器等
 		if (!bGetStartupInfoALoaded && lpStartupInfo && IsEXECaller(_ReturnAddress())) {
 			bGetStartupInfoALoaded = true;
 			// Click MapleStory.exe
@@ -116,10 +132,11 @@ namespace {
 		_GetStartupInfoA(lpStartupInfo);
 	}
 
-	// CreateMutexA is the first Windows library call after the executable unpacks itself. 
-	// It is recommended to have all Maple hooking and memory editing inside or called from the CreateMutexA function.
+	// Hook: CreateMutexA，EXE解包后第一个调用的 Windows API，适合做内存修改和多开处理
 	static auto _CreateMutexA = decltype(&CreateMutexA)(GetProcAddress(GetModuleHandleW(L"KERNEL32"), "CreateMutexA"));
 	HANDLE WINAPI CreateMutexA_Hook(LPSECURITY_ATTRIBUTES lpMutexAttributes, BOOL bInitialOwner, LPCSTR lpName) {
+		// 只在首次调用时执行网络重定向、数据包 Hook、去除多开检测等
+		// 如果检测到多开互斥体名，直接返回伪造句柄实现多开
 		if (!bCreateMutexALoaded) {
 			bCreateMutexALoaded = true;
 			// Select game area
@@ -151,8 +168,10 @@ namespace {
 		return _CreateMutexA(lpMutexAttributes, bInitialOwner, lpName);
 	}
 
+	// Hook: CreateWindowExA，窗口创建时调用，用于自定义窗口标题、去除广告窗口等
 	static auto _CreateWindowExA = decltype(&CreateWindowExA)(GetProcAddress(LoadLibraryW(L"USER32"), "CreateWindowExA"));
 	HWND WINAPI CreateWindowExA_Hook(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int x, int y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam) {
+		// 根据窗口类名判断是否为广告窗口或主窗口，进行拦截或自定义
 		if (!Config::IsStartUpDlgSkipped) {
 			return _CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
 		}
@@ -178,8 +197,10 @@ namespace {
 		return _CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
 	}
 
+	// Hook: ImmAssociateContext，窗口输入法关联时调用，用于支持中文输入和应用伤害字皮肤
 	static auto _ImmAssociateContext = decltype(&ImmAssociateContext)(GetProcAddress(GetModuleHandleW(L"IMM32"), "ImmAssociateContext"));
 	HIMC WINAPI ImmAssociateContext_Hook(HWND hWnd, HIMC hIMC) {
+		// 首次调用时初始化伤害字皮肤（如有配置），并强制开启 IME 输入法
 		// Call by CWndMan::CWndMan<-CWvsApp::CreateWndManager after CWvsApp::InitializeGameData in CWvsApp::SetUp 
 		if (!bImmAssociateContextLoaded) {
 			// TODO
@@ -201,8 +222,10 @@ namespace {
 
 }
 
+// Hook 命名空间，暴露安装和卸载 Hook 的接口
 namespace Hook {
 
+	// 安装所有核心 Hook，拦截关键 API
 	void Install() {
 		bool ok = SHOOK(true, &_GetStartupInfoA, GetStartupInfoA_Hook) &&
 			SHOOK(true, &_CreateMutexA, CreateMutexA_Hook) &&
@@ -213,6 +236,7 @@ namespace Hook {
 		}
 	}
 
+	// 卸载所有 Hook，恢复原始 API
 	void Uninstall() {
 		bool ok = SHOOK(false, &_GetStartupInfoA, GetStartupInfoA_Hook) &&
 			SHOOK(false, &_CreateMutexA, CreateMutexA_Hook) &&

@@ -1,6 +1,27 @@
+// Injector.cpp 负责实现 DLL 注入目标进程的具体流程。
+// 支持 32 位和 64 位注入，包含进程创建、内存分配、远程线程注入等核心逻辑。
+//
+// 主要功能：
+// 1. 构造/析构函数：初始化和清理注入相关资源。
+// 2. Run：创建目标进程并注入 DLL（支持 32/64 位）。
+// 3. Inject：对已存在进程进行 DLL 注入。
+// 4. GetProcessHandle：获取目标进程句柄。
+//
+// 主要成员变量说明：
+// - target_path：目标程序（EXE）路径。
+// - dll_path：待注入的 DLL 路径。
+// - process_handle：目标进程句柄。
+// - main_thread_handle：目标进程主线程句柄。
+// - is_successed：注入是否成功。
+// - target_pi：进程信息结构体。
 #include "Injector.h"
 
 Injector::Injector(std::wstring wTargetPath, std::wstring wDllPath) {
+	// 构造函数
+	// 参数：wTargetPath - 目标 EXE 路径
+	//      wDllPath - DLL 路径
+	// 初始化成员变量，句柄置空，is_successed 置为 false
+	// 调用场景：新建 Injector 对象时
 	target_path = wTargetPath;
 	dll_path = wDllPath;
 	process_handle = NULL;
@@ -10,6 +31,10 @@ Injector::Injector(std::wstring wTargetPath, std::wstring wDllPath) {
 };
 
 Injector::Injector(PROCESS_INFORMATION& pi, std::wstring wDllPath) {
+	// 构造函数
+	// 参数：pi - 已有进程信息
+	//      wDllPath - DLL 路径
+	// 用于对已存在进程进行注入
 	dll_path = wDllPath;
 	process_handle = NULL;
 	main_thread_handle = NULL;
@@ -18,6 +43,9 @@ Injector::Injector(PROCESS_INFORMATION& pi, std::wstring wDllPath) {
 }
 
 Injector::~Injector() {
+	// 析构函数
+	// 释放主线程和进程句柄
+	// 如果注入成功则恢复主线程，否则终止进程
 	if (main_thread_handle) {
 		if (is_successed) {
 			ResumeThread(main_thread_handle);
@@ -32,11 +60,16 @@ Injector::~Injector() {
 	}
 }
 
+// 获取目标进程句柄
+// 返回值：HANDLE，目标进程句柄
 HANDLE Injector::GetProcessHandle() {
 	return process_handle;
 }
 
 #ifdef _WIN64
+// Run：创建目标进程并注入 DLL（64 位实现）
+// 参数：wCmdLine - 启动参数（可选）
+// 返回值：true 表示注入成功，false 表示失败
 bool Injector::Run(std::wstring wCmdLine) {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
@@ -136,6 +169,8 @@ bool Injector::Run(std::wstring wCmdLine) {
 	return true;
 }
 
+// Inject：对已存在进程进行 DLL 注入（64 位实现）
+// 返回值：true 表示注入成功，false 表示失败
 bool Injector::Inject() {
 	if (target_pi.dwProcessId == 0) {
 		return false;
@@ -198,6 +233,9 @@ bool Injector::Inject() {
 }
 
 #else
+// Run：创建目标进程并注入 DLL（32 位实现）
+// 参数：wCmdLine - 启动参数（可选）
+// 返回值：true 表示注入成功，false 表示失败
 bool Injector::Run(std::wstring wCmdLine) {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
